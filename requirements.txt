@@ -1,0 +1,9 @@
+openai-whisper
+pyannote.audio
+# pyannote.audio 3.4.0 usa hf_hub_download(use_auth_token=...), eliminado en
+# huggingface_hub 1.0. Hay que mantenerlo por debajo de esa versión.
+huggingface_hub<1.0
+pydub
+torch
+torchaudio
+python-dotenv

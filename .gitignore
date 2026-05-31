@@ -1,0 +1,24 @@
+# Entorno y secretos
+.env
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Salidas y datos
+output/
+logs/
+videos/
+*.wav
+*.mp3
+*.mp4
+*.m4a
+*.ogg
+
+# Sistema / editor
+.DS_Store
+.idea/
+.vscode/
