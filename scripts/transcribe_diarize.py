@@ -109,22 +109,43 @@ def split_audio(wav_path: Path, chunk_minutes: int, tmp_dir: str) -> list[Path]:
     return chunks
 
 
-def transcribe_chunks(chunks: list, model_name: str, language: str | None) -> list[dict]:
-    """Transcribe cada chunk con Whisper y devuelve los segmentos con offset global."""
-    import whisper
-    print(f"\n[2/4] Cargando modelo Whisper '{model_name}'...")
-    model = whisper.load_model(model_name)
+def transcribe_chunks(chunks: list, model_name: str, language_arg: str,
+                      language: str | None, chunk_minutes: int,
+                      cache_dir: Path | None = None, force: bool = False) -> list[dict]:
+    """Transcribe cada chunk con Whisper y devuelve los segmentos con offset global.
+
+    Si `cache_dir` está definido, cada chunk se cachea individualmente: los que ya
+    existan se reutilizan (salvo `force=True`) y el modelo Whisper solo se carga si
+    queda al menos un chunk por transcribir. Esto hace la transcripción reanudable.
+    """
+    model = None  # carga perezosa: solo si hay algo que transcribir
     all_segments = []
     for idx, (chunk_path, offset) in enumerate(chunks):
+        if cache_dir is not None and not force:
+            cached = load_cached_chunk(cache_dir, idx, model_name, language_arg, chunk_minutes)
+            if cached is not None:
+                print(f"    Reutilizando segmento {idx + 1}/{len(chunks)} (cacheado, "
+                      f"{len(cached)} fragmentos)")
+                all_segments.extend(cached)
+                continue
+
+        if model is None:
+            import whisper
+            print(f"\n[2/4] Cargando modelo Whisper '{model_name}'...")
+            model = whisper.load_model(model_name)
+
         print(f"    Transcribiendo segmento {idx + 1}/{len(chunks)}...", end=" ", flush=True)
         result = model.transcribe(str(chunk_path), language=language, verbose=False)
-        for seg in result["segments"]:
-            all_segments.append({
-                "start": seg["start"] + offset,
-                "end":   seg["end"]   + offset,
-                "text":  seg["text"].strip(),
-            })
-        print(f"OK ({len(result['segments'])} fragmentos)")
+        chunk_segments = [
+            {"start": seg["start"] + offset,
+             "end":   seg["end"]   + offset,
+             "text":  seg["text"].strip()}
+            for seg in result["segments"]
+        ]
+        if cache_dir is not None:
+            save_chunk(cache_dir, idx, model_name, language_arg, chunk_minutes, chunk_segments)
+        all_segments.extend(chunk_segments)
+        print(f"OK ({len(chunk_segments)} fragmentos)")
     return all_segments
 
 
@@ -155,6 +176,39 @@ def save_segments(path: Path, model_name: str, language: str, segments: list[dic
         json.dump({"model": model_name, "language": language, "segments": segments},
                   f, ensure_ascii=False, indent=2)
     print(f"    → Transcripción cacheada en: {path.name}")
+
+
+def chunk_cache_file(cache_dir: Path, idx: int) -> Path:
+    """Ruta del JSON de caché de un chunk concreto dentro del directorio de caché."""
+    return cache_dir / f"chunk_{idx:03d}.json"
+
+
+def load_cached_chunk(cache_dir: Path, idx: int, model_name: str, language: str,
+                      chunk_minutes: int) -> list[dict] | None:
+    """Devuelve los segmentos cacheados del chunk si existen y coinciden los metadatos; si no, None."""
+    path = chunk_cache_file(cache_dir, idx)
+    if not path.exists():
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+    if (data.get("model") != model_name or data.get("language") != language
+            or data.get("chunk_minutes") != chunk_minutes or data.get("index") != idx):
+        return None
+    segments = data.get("segments")
+    return segments if segments is not None else None
+
+
+def save_chunk(cache_dir: Path, idx: int, model_name: str, language: str,
+               chunk_minutes: int, segments: list[dict]) -> None:
+    """Persiste los segmentos de un chunk para poder reanudar transcripciones interrumpidas."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with open(chunk_cache_file(cache_dir, idx), "w", encoding="utf-8") as f:
+        json.dump({"model": model_name, "language": language,
+                   "chunk_minutes": chunk_minutes, "index": idx, "segments": segments},
+                  f, ensure_ascii=False, indent=2)
 
 
 def diarize(wav_path: Path, hf_token: str, num_speakers: int | None) -> list[dict]:
@@ -344,7 +398,14 @@ def main():
     parser.add_argument(
         "--force-transcribe",
         action="store_true",
-        help="Rehace la transcripción aunque exista el caché de segmentos.",
+        help="Ignora el caché combinado y lo reconstruye desde los chunks "
+             "(reutiliza el caché por-chunk si existe).",
+    )
+    parser.add_argument(
+        "--force-chunks",
+        action="store_true",
+        help="Re-transcribe cada chunk ignorando el caché por-chunk "
+             "(implica saltar también el caché combinado).",
     )
     args = parser.parse_args()
 
@@ -379,6 +440,10 @@ def main():
     # Cachés persistentes junto al audio de origen (se reutilizan entre ejecuciones)
     cached_wav = audio_path.with_name(audio_path.stem + "_16k_mono.wav")
     cached_segments = audio_path.with_name(audio_path.stem + "_segments.json")
+    # El caché por-chunk vive en un subdirectorio keyed por modelo+idioma+chunk_minutes,
+    # ya que las fronteras de cada chunk dependen de chunk_minutes.
+    chunk_cache_dir = (audio_path.with_name(audio_path.stem + "_chunks")
+                       / f"{args.model}_{args.language}_{args.chunk_minutes}min")
     language = None if args.language.lower() == "auto" else args.language
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -395,13 +460,19 @@ def main():
             chunks = [chunks[args.debug_chunk - 1]]
             print(f"\n[DEBUG] Transcribiendo solo el fragmento {args.debug_chunk} "
                   f"y omitiendo la diarización.")
-            segments = transcribe_chunks(chunks, args.model, language)
+            # En modo debug nunca se lee ni escribe el caché por-chunk (siempre fresco).
+            segments = transcribe_chunks(chunks, args.model, args.language, language,
+                                         args.chunk_minutes)
         else:
-            segments = (None if args.force_transcribe
-                        else load_cached_segments(cached_segments, args.model, args.language))
+            # --force-chunks implica saltar el combinado para que el forzado tenga efecto.
+            use_combined = not args.force_transcribe and not args.force_chunks
+            segments = (load_cached_segments(cached_segments, args.model, args.language)
+                        if use_combined else None)
             if segments is None:
                 chunks = split_audio(wav_path, args.chunk_minutes, tmp_dir)
-                segments = transcribe_chunks(chunks, args.model, language)
+                segments = transcribe_chunks(chunks, args.model, args.language, language,
+                                             args.chunk_minutes, cache_dir=chunk_cache_dir,
+                                             force=args.force_chunks)
                 save_segments(cached_segments, args.model, args.language, segments)
 
         if args.skip_diarization or args.debug_chunk is not None:
