@@ -1,7 +1,16 @@
-# Transcripción + Diarización de Audio
-### Whisper (OpenAI) + pyannote-audio — local, gratuito
+# Plenos — Transcripción, Diarización y Análisis
+
+Monorepo con dos componentes:
+
+- **`transcriber/`** — transcripción + diarización de audio con Whisper (OpenAI) + pyannote
+  (local y gratuito). Documentado abajo.
+- **`analyzer/`** — chatbot que analiza las transcripciones generadas, con el Anthropic SDK
+  (arquitectura hub-spoke). Ver [Análisis con chatbot](#análisis-con-chatbot-analyzer).
 
 ---
+
+## Transcripción + Diarización de Audio
+### Whisper (OpenAI) + pyannote-audio — local, gratuito
 
 ## ¿Qué hace?
 
@@ -32,7 +41,8 @@ sudo apt install ffmpeg
 
 ### 3. Instalar dependencias Python
 ```bash
-pip install openai-whisper pyannote.audio pydub torch torchaudio
+pip install -r transcriber/requirements.txt
+# (equivale a: pip install openai-whisper pyannote.audio pydub torch torchaudio)
 ```
 
 > **Nota sobre tamaño:** `torch` pesa ~2 GB. Si tienes GPU NVIDIA, instala la versión CUDA:
@@ -52,27 +62,27 @@ pip install openai-whisper pyannote.audio pydub torch torchaudio
 
 ### Básico
 ```bash
-python transcribe_diarize.py mi_audio.mp3 --hf-token hf_XXXXXXXX
+python transcriber/transcribe_diarize.py mi_audio.mp3 --hf-token hf_XXXXXXXX
 ```
 
 ### Con número de hablantes conocido (mejora la diarización)
 ```bash
-python transcribe_diarize.py reunion.mp3 --hf-token hf_XXXX --speakers 4
+python transcriber/transcribe_diarize.py reunion.mp3 --hf-token hf_XXXX --speakers 4
 ```
 
 ### Solo transcripción (sin diarización, más rápido)
 ```bash
-python transcribe_diarize.py audio.mp3 --skip-diarization
+python transcriber/transcribe_diarize.py audio.mp3 --skip-diarization
 ```
 
 ### Guardar también en JSON estructurado
 ```bash
-python transcribe_diarize.py audio.mp3 --hf-token hf_XXXX --json resultado.json
+python transcriber/transcribe_diarize.py audio.mp3 --hf-token hf_XXXX --json resultado.json
 ```
 
 ### Todos los parámetros
 ```bash
-python transcribe_diarize.py audio.mp3 \
+python transcriber/transcribe_diarize.py audio.mp3 \
   --hf-token hf_XXXX \        # Token Hugging Face
   --model large-v3 \           # Modelo Whisper (tiny/base/small/medium/large/large-v3)
   --speakers 3 \               # Número de hablantes (opcional)
@@ -149,3 +159,43 @@ Al final del proceso verás un resumen de tiempo por hablante:
 
 **Diarización imprecisa**
 → Especifica `--speakers N` si sabes el número exacto de personas.
+
+---
+
+## Análisis con chatbot (`analyzer/`)
+
+Un asistente de terminal que conversa sobre una transcripción ya generada, construido con el
+**Anthropic SDK**. Arquitectura **hub-spoke**: un agente "hub" orquesta el trabajo y, en
+futuras iteraciones, delega en "spokes" especializados (estadísticas por hablante, extracción
+del orden del día, búsqueda de citas con marca de tiempo, resúmenes por punto). La primera
+iteración es un **agente único** sobre el que iterar.
+
+### Requisitos
+
+1. Instalar dependencias del chatbot (en el mismo venv 3.9):
+   ```bash
+   make install-analyzer        # o: pip install -r analyzer/requirements.txt
+   ```
+2. Añadir tu clave de API de Anthropic al `.env` (`make env` lo crea desde la plantilla):
+   ```
+   ANTHROPIC_API_KEY=sk-ant-...
+   ```
+   Consíguela en [console.anthropic.com](https://console.anthropic.com/).
+
+### Uso
+
+```bash
+# Usa la transcripción de muestra por defecto
+python -m analyzer
+
+# Indica otra transcripción (.txt o .json) y modelo
+python -m analyzer videos/otro_pleno_transcripcion.txt --model claude-opus-4-8 --debug
+```
+
+Dentro del chat: pregunta en lenguaje natural (p.ej. *"¿Cuáles son los puntos del orden del
+día?"*). Comandos: `/ayuda`, `/tokens` (uso acumulado), `/salir`.
+
+> **Nota:** el modelo por defecto es `claude-sonnet-4-6` (barato para iterar). La transcripción
+> se cachea en el contexto (prompt caching), así que cada turno es económico. Si la muestra
+> `_segments.json` se generó con `--skip-diarization`, no habrá identificación de hablantes y el
+> análisis "por hablante" no estará disponible hasta regenerarla con diarización.
