@@ -7,6 +7,11 @@ Monorepo con dos componentes:
 - **`analyzer/`** — chatbot que analiza las transcripciones generadas, con el Anthropic SDK
   (arquitectura hub-spoke). Ver [Análisis con chatbot](#análisis-con-chatbot-analyzer).
 
+> **Windows:** el `Makefile` usa shell POSIX y **no** corre en cmd.exe/PowerShell. Usa el
+> equivalente `make.ps1` (mismos targets) o invoca los comandos Python directamente —
+> ver [Windows](#windows). Los entrypoints ya fuerzan UTF-8 y ANSI en la consola, así que
+> la salida con acentos/emojis no rompe aunque la redirijas a un fichero.
+
 ---
 
 ## Transcripción + Diarización de Audio
@@ -15,7 +20,7 @@ Monorepo con dos componentes:
 ## ¿Qué hace?
 
 - **Transcribe** el audio usando Whisper (funciona en español, inglés y 100+ idiomas)
-- **Identifica quién habla** en cada momento (diarización) con pyannote
+- **Identifica quién habla** en cada momento (diarización) con pyannote — opcional, con `--diarize`
 - Soporta archivos de cualquier duración (trocea el audio automáticamente)
 - Genera un `.txt` legible y opcionalmente un `.json` estructurado
 
@@ -36,7 +41,8 @@ brew install ffmpeg
 # Ubuntu / Debian
 sudo apt install ffmpeg
 
-# Windows — descarga desde https://ffmpeg.org/download.html
+# Windows (PowerShell) — instálalo y reabre la terminal para que entre en el PATH
+winget install Gyan.FFmpeg      # o: choco install ffmpeg
 ```
 
 ### 3. Instalar dependencias Python
@@ -50,7 +56,9 @@ pip install -r transcriber/requirements.txt
 > pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 > ```
 
-### 4. Token de Hugging Face (para diarización)
+### 4. Token de Hugging Face (solo para diarización)
+
+Solo se necesita si vas a usar `--diarize` o `--diarize-only`. La transcripción básica no lo pide.
 
 1. Regístrate gratis en [huggingface.co](https://huggingface.co)
 2. Acepta los términos del modelo aquí: [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
@@ -60,32 +68,44 @@ pip install -r transcriber/requirements.txt
 
 ## Uso
 
-### Básico
+### Básico (solo transcripción, sin token)
+La diarización está **desactivada por defecto**: esto solo transcribe y no necesita `HF_TOKEN`.
 ```bash
-python transcriber/transcribe_diarize.py mi_audio.mp3 --hf-token hf_XXXXXXXX
+python transcriber/transcribe_diarize.py mi_audio.mp3
+```
+
+### Con diarización (identifica quién habla)
+Activa la diarización con `--diarize` (requiere `HF_TOKEN`):
+```bash
+python transcriber/transcribe_diarize.py mi_audio.mp3 --diarize --hf-token hf_XXXXXXXX
 ```
 
 ### Con número de hablantes conocido (mejora la diarización)
 ```bash
-python transcriber/transcribe_diarize.py reunion.mp3 --hf-token hf_XXXX --speakers 4
+python transcriber/transcribe_diarize.py reunion.mp3 --diarize --hf-token hf_XXXX --speakers 4
 ```
 
-### Solo transcripción (sin diarización, más rápido)
+### Solo diarización (quién habla y cuándo, sin transcribir)
+No carga Whisper. Emite los turnos en `audio_diarization.json` y el tiempo por hablante:
 ```bash
-python transcriber/transcribe_diarize.py audio.mp3 --skip-diarization
+python transcriber/transcribe_diarize.py audio.mp3 --hf-token hf_XXXX --diarize-only --speakers 3
 ```
+La diarización se **cachea** en `audio_diarization.json`, así que una corrida completa posterior
+(con el mismo nº de hablantes) la reutiliza y se salta pyannote. Usa `--force-diarize` para
+re-diarizar ignorando el caché.
 
 ### Guardar también en JSON estructurado
 ```bash
-python transcriber/transcribe_diarize.py audio.mp3 --hf-token hf_XXXX --json resultado.json
+python transcriber/transcribe_diarize.py audio.mp3 --json resultado.json
 ```
 
 ### Todos los parámetros
 ```bash
 python transcriber/transcribe_diarize.py audio.mp3 \
-  --hf-token hf_XXXX \        # Token Hugging Face
+  --diarize \                  # Activa la diarización (identifica hablantes)
+  --hf-token hf_XXXX \         # Token Hugging Face (solo con --diarize/--diarize-only)
   --model large-v3 \           # Modelo Whisper (tiny/base/small/medium/large/large-v3)
-  --speakers 3 \               # Número de hablantes (opcional)
+  --speakers 3 \               # Número de hablantes (opcional, solo aplica al diarizar)
   --chunk-minutes 20 \         # Tamaño de segmentos en minutos
   --output transcripcion.txt \ # Archivo de salida
   --json datos.json            # Salida estructurada adicional
@@ -151,14 +171,54 @@ Al final del proceso verás un resumen de tiempo por hablante:
 **`ffmpeg not found`**
 → Instala ffmpeg y reinicia el terminal.
 
-**Error 401 de Hugging Face**
-→ Asegúrate de haber aceptado los términos en la página del modelo.
+**Error 401 / 403 de Hugging Face** (`403 ... enable access to public gated repositories`)
+→ No basta con aceptar los términos del modelo: el **token** debe poder leer repos *gated*. Usa
+un token de tipo **Read**, o si es *fine-grained* marca *"Read access to contents of all public
+gated repos you can access"* en [settings/tokens](https://huggingface.co/settings/tokens). Acepta
+además los términos de **ambos** modelos con la misma cuenta:
+[speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) y
+[segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0).
 
 **`CUDA out of memory`**
 → Usa un modelo más pequeño (`--model medium`) o procesa con CPU.
 
 **Diarización imprecisa**
 → Especifica `--speakers N` si sabes el número exacto de personas.
+
+---
+
+## Windows
+
+El `Makefile` está pensado para shell POSIX (macOS/Linux, o Git Bash/WSL en Windows). En una
+PowerShell nativa usa **`make.ps1`**, que replica los mismos targets:
+
+```powershell
+.\make.ps1 install                 # dependencias del transcriptor
+.\make.ps1 install-analyzer        # dependencias del chatbot
+.\make.ps1 env                     # crea .env desde .env_template
+.\make.ps1 transcribe -Audio outputs\videos\pleno.mp4 --diarize --speakers 3
+.\make.ps1 diarize    -Audio outputs\videos\pleno.mp4 --speakers 3
+.\make.ps1 analyzer   -Transcript outputs\videos\otro.txt --debug
+.\make.ps1 download   -Url "https://...m3u8" -Output outputs\videos\pleno.mp4
+.\make.ps1 help                    # lista de targets
+```
+
+Los flags extra (`--speakers`, `--model`, etc.) se reenvían tal cual al comando. Si PowerShell
+bloquea la ejecución de scripts, invócalo sin tocar la política global:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\make.ps1 transcribe -Audio outputs\videos\pleno.mp4
+```
+
+O, sin `make.ps1`, ejecuta los comandos Python directamente (usa `\` en las rutas):
+
+```powershell
+python transcriber\transcribe_diarize.py outputs\videos\pleno.mp4 --diarize --speakers 3
+python -m analyzer
+```
+
+> **ffmpeg** debe estar en el `PATH` (lo necesita pydub para leer mp3/mp4/m4a): `winget install
+> Gyan.FFmpeg` y reabre la terminal. La salida UTF-8/ANSI ya se configura sola en el arranque.
 
 ---
 
@@ -189,13 +249,13 @@ iteración es un **agente único** sobre el que iterar.
 python -m analyzer
 
 # Indica otra transcripción (.txt o .json) y modelo
-python -m analyzer videos/otro_pleno_transcripcion.txt --model claude-opus-4-8 --debug
+python -m analyzer outputs/videos/otro_pleno_transcripcion.txt --model claude-opus-4-8 --debug
 ```
 
 Dentro del chat: pregunta en lenguaje natural (p.ej. *"¿Cuáles son los puntos del orden del
 día?"*). Comandos: `/ayuda`, `/tokens` (uso acumulado), `/salir`.
 
 > **Nota:** el modelo por defecto es `claude-sonnet-4-6` (barato para iterar). La transcripción
-> se cachea en el contexto (prompt caching), así que cada turno es económico. Si la muestra
-> `_segments.json` se generó con `--skip-diarization`, no habrá identificación de hablantes y el
-> análisis "por hablante" no estará disponible hasta regenerarla con diarización.
+> se cachea en el contexto (prompt caching), así que cada turno es económico. Como la
+> transcripción por defecto **no diariza**, no habrá identificación de hablantes y el análisis
+> "por hablante" no estará disponible hasta regenerarla con `--diarize`.
