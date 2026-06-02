@@ -36,8 +36,37 @@ MAX_TRANSCRIPT_TOKENS = int(os.environ.get("ANALYZER_MAX_TRANSCRIPT_TOKENS", "70
 
 # Transcripción cargada por defecto (la muestra existente del repo).
 DEFAULT_TRANSCRIPT = os.environ.get(
-    "ANALYZER_TRANSCRIPT", "videos/pleno_20_mayo_2026_transcripcion.txt"
+    "ANALYZER_TRANSCRIPT", "outputs/videos/pleno_20_mayo_2026_transcripcion.txt"
 )
+
+
+def configure_console() -> None:
+    """Prepara la consola para Unicode/ANSI de forma multiplataforma.
+
+    Fuerza UTF-8 en stdout/stderr (en Windows la salida redirigida usa cp1252 y los
+    caracteres de caja del banner o los frames braille del spinner lanzarían
+    UnicodeEncodeError) y, en Windows, habilita las secuencias VT/ANSI que usa el
+    spinner (`\\r\\033[K`) para que no se impriman como basura en cmd.exe legacy.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8")
+            except (ValueError, OSError):
+                pass
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            # STD_OUTPUT_HANDLE = -11; ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+            handle = kernel32.GetStdHandle(-11)
+            mode = ctypes.c_uint32()
+            if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+                kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+        except Exception:
+            pass  # consola no estándar / sin permisos: degradamos sin romper
 
 
 def cache_control() -> dict:

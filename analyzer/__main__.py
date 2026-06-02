@@ -42,6 +42,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Salida UTF-8 + VT/ANSI antes de imprimir el banner/spinner (clave en Windows).
+    config.configure_console()
+
     config.require_api_key()
 
     try:
