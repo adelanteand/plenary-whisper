@@ -1,0 +1,5 @@
+# Dependencias del chatbot de análisis (analyzer/). Separadas del transcriptor
+# (que arrastra torch/whisper/pyannote y el pin huggingface_hub<1.0).
+# Mismo venv 3.9. El SDK de Anthropic soporta Python 3.8+.
+anthropic
+python-dotenv
