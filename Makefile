@@ -1,20 +1,20 @@
-.PHONY: help install install-analyzer analyzer env download transcribe
+.PHONY: help install install-analyzer analyzer env download transcribe diarize
 
 .DEFAULT_GOAL := help
 
 # URL del stream/archivo a descargar y ruta de salida.
-# Uso: make download URL="https://..." OUTPUT=videos/pleno.mp4
+# Uso: make download URL="https://..." OUTPUT=outputs/videos/pleno.mp4
 URL ?=
-OUTPUT ?= videos/descarga.mp4
+OUTPUT ?= outputs/videos/descarga.mp4
 
 # AUDIO: ruta al audio/vídeo a transcribir (mp3, wav, m4a, mp4, ogg...).
-# Uso: make transcribe AUDIO=videos/pleno.mp4 ARGS="--speakers 3"
+# Uso: make transcribe AUDIO=outputs/videos/pleno.mp4 ARGS="--speakers 3"
 AUDIO ?=
 
 # Argumentos opcionales (passthrough de flags al comando).
 # TRANSCRIPT: ruta a la transcripción (.txt/.json); por defecto usa la muestra.
 # ARGS:       flags extra, p. ej. ARGS="--model claude-opus-4-8 --debug"
-# Uso: make analyzer  |  make analyzer TRANSCRIPT=videos/otro.txt ARGS="--debug"
+# Uso: make analyzer  |  make analyzer TRANSCRIPT=outputs/videos/otro.txt ARGS="--debug"
 TRANSCRIPT ?=
 ARGS ?=
 
@@ -30,13 +30,17 @@ install-analyzer: ## Instala las dependencias del chatbot (analyzer)
 analyzer: ## Arranca el chatbot de análisis (vars: TRANSCRIPT, ARGS)
 	python -m analyzer $(TRANSCRIPT) $(ARGS)
 
-transcribe: ## Transcribe + diariza un audio con Whisper + pyannote (vars: AUDIO, ARGS)
-	@if [ -z "$(AUDIO)" ]; then echo "[ERROR] Falta AUDIO. Uso: make transcribe AUDIO=videos/pleno.mp4 ARGS=\"--speakers 3\""; exit 1; fi
+transcribe: ## Transcribe un audio con Whisper (añade --diarize en ARGS para identificar hablantes) (vars: AUDIO, ARGS)
+	@if [ -z "$(AUDIO)" ]; then echo "[ERROR] Falta AUDIO. Uso: make transcribe AUDIO=outputs/videos/pleno.mp4 ARGS=\"--diarize --speakers 3\""; exit 1; fi
 	python transcriber/transcribe_diarize.py "$(AUDIO)" $(ARGS)
+
+diarize: ## Solo diarización (sin Whisper); cachea los turnos (vars: AUDIO, ARGS)
+	@if [ -z "$(AUDIO)" ]; then echo "[ERROR] Falta AUDIO. Uso: make diarize AUDIO=outputs/videos/pleno.mp4 ARGS=\"--speakers 3\""; exit 1; fi
+	python transcriber/transcribe_diarize.py "$(AUDIO)" --diarize-only $(ARGS)
 
 download: ## Descarga/remux de un stream con ffmpeg (vars: URL, OUTPUT)
 	@command -v ffmpeg >/dev/null 2>&1 || { echo "[ERROR] ffmpeg no está instalado. Instálalo con: brew install ffmpeg"; exit 1; }
-	@if [ -z "$(URL)" ]; then echo "[ERROR] Falta URL. Uso: make download URL=\"https://...\" OUTPUT=videos/pleno.mp4"; exit 1; fi
+	@if [ -z "$(URL)" ]; then echo "[ERROR] Falta URL. Uso: make download URL=\"https://...\" OUTPUT=outputs/videos/pleno.mp4"; exit 1; fi
 	@mkdir -p $(dir $(OUTPUT))
 	ffmpeg -i "$(URL)" -c copy "$(OUTPUT)"
 

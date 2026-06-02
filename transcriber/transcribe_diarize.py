@@ -13,10 +13,13 @@ Requisitos:
     - ffmpeg instalado en el sistema (brew install ffmpeg / apt install ffmpeg)
 
 Uso:
-    python transcribe_diarize.py audio.mp3
-    python transcribe_diarize.py audio.mp3 --hf-token hf_xxxx
-    python transcribe_diarize.py audio.mp3 --model large-v3 --speakers 3
+    python transcribe_diarize.py audio.mp3                      # solo transcribe (default)
+    python transcribe_diarize.py audio.mp3 --diarize --hf-token hf_xxxx   # + hablantes
+    python transcribe_diarize.py audio.mp3 --diarize --speakers 3
     python transcribe_diarize.py audio.mp3 --chunk-minutes 15 --output resultado.txt
+
+Nota: la diarización (identificar quién habla) está desactivada por defecto. Actívala con
+--diarize (requiere HF_TOKEN). Sin ese flag solo se transcribe.
 """
 
 from __future__ import annotations
@@ -37,7 +40,43 @@ try:
 except ImportError:
     pass
 
+# Modelo de diarización de pyannote (constante: se referencia en diarize() y en el
+# caché de diarización para evitar que ambos sitios diverjan).
+PYANNOTE_MODEL = "pyannote/speaker-diarization-3.1"
+
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+def configure_console() -> None:
+    """Prepara la consola para imprimir Unicode con seguridad multiplataforma.
+
+    - Fuerza UTF-8 en stdout/stderr. En Windows, la salida redirigida (`> log.txt`,
+      pipes, CI) usa cp1252 por defecto y los caracteres '→ ✓ ─ ═' / braille del
+      spinner lanzarían UnicodeEncodeError abortando el proceso. En macOS/Linux
+      es un no-op (ya suelen ser UTF-8) salvo locales C/POSIX, donde también ayuda.
+    - En Windows habilita el procesamiento de secuencias VT/ANSI de la consola,
+      para que '\\r' y los códigos de control se rendericen en vez de imprimirse
+      como basura literal en cmd.exe legacy.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8")
+            except (ValueError, OSError):
+                pass
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            # STD_OUTPUT_HANDLE = -11; ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+            handle = kernel32.GetStdHandle(-11)
+            mode = ctypes.c_uint32()
+            if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+                kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+        except Exception:
+            pass  # consola no estándar / sin permisos: degradamos sin romper
+
 
 def fmt_time(seconds: float) -> str:
     """Convierte segundos a HH:MM:SS."""
@@ -211,6 +250,23 @@ def save_chunk(cache_dir: Path, idx: int, model_name: str, language: str,
                   f, ensure_ascii=False, indent=2)
 
 
+def _exit_with_diarization_help(detail: str | None = None) -> None:
+    """Imprime ayuda accionable ante un fallo al cargar el modelo gated de pyannote y sale."""
+    print("\n[ERROR] No se pudo cargar el pipeline de pyannote.")
+    if detail:
+        print(f"    Causa: {detail}")
+    print("Casi siempre es por permisos del token o de los modelos 'gated'. Comprueba:")
+    print("  1. Que tu HF_TOKEN es de tipo 'Read', o un fine-grained CON el permiso")
+    print("     'Read access to contents of all public gated repos you can access'")
+    print("     (un 403 'enable access to public gated repositories' es exactamente esto):")
+    print("       https://huggingface.co/settings/tokens")
+    print("  2. Que has ACEPTADO las condiciones de uso de AMBOS modelos")
+    print("     (hay que aceptarlos por separado, con la misma cuenta del token):")
+    print("       https://huggingface.co/pyannote/speaker-diarization-3.1")
+    print("       https://huggingface.co/pyannote/segmentation-3.0")
+    sys.exit(1)
+
+
 def diarize(wav_path: Path, hf_token: str, num_speakers: int | None) -> list[dict]:
     """Ejecuta la diarización con pyannote y devuelve una lista de turnos de habla."""
     from pyannote.audio import Pipeline
@@ -218,20 +274,17 @@ def diarize(wav_path: Path, hf_token: str, num_speakers: int | None) -> list[dic
     print(f"\n[3/4] Ejecutando diarización (pyannote)...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"    → Dispositivo: {device}")
-    pipeline = Pipeline.from_pretrained(
-        "pyannote/speaker-diarization-3.1",
-        use_auth_token=hf_token,
-    )
+    # huggingface_hub <1.0 puede devolver None ante un repo gated sin acceso; las versiones
+    # más nuevas lanzan HfHubHTTPError (403/401). Cubrimos ambos comportamientos.
+    try:
+        pipeline = Pipeline.from_pretrained(
+            PYANNOTE_MODEL,
+            use_auth_token=hf_token,
+        )
+    except Exception as e:
+        _exit_with_diarization_help(str(e))
     if pipeline is None:
-        print("\n[ERROR] No se pudo cargar el pipeline de pyannote (devolvió None).")
-        print("Casi siempre es por permisos del modelo (es 'gated'). Comprueba:")
-        print("  1. Que tu HF_TOKEN es válido y tiene scope de lectura:")
-        print("       https://huggingface.co/settings/tokens")
-        print("  2. Que has ACEPTADO las condiciones de uso de AMBOS modelos")
-        print("     (hay que aceptarlos por separado, con la misma cuenta del token):")
-        print("       https://huggingface.co/pyannote/speaker-diarization-3.1")
-        print("       https://huggingface.co/pyannote/segmentation-3.0")
-        sys.exit(1)
+        _exit_with_diarization_help()
     pipeline.to(device)
 
     kwargs = {}
@@ -248,6 +301,55 @@ def diarize(wav_path: Path, hf_token: str, num_speakers: int | None) -> list[dic
             "speaker": speaker,
         })
     print(f"    → {len(set(t['speaker'] for t in turns))} hablante(s) detectado(s)")
+    return turns
+
+
+def load_cached_diarization(path: Path, speakers: int | None) -> list[dict] | None:
+    """Devuelve los turnos cacheados si existen y coinciden modelo+nº de hablantes; si no, None.
+
+    Espejo de `load_cached_segments`. La validez de la diarización depende del modelo de pyannote
+    y del nº de hablantes solicitado (`--speakers`); NO de `chunk_minutes` ni del idioma, porque
+    pyannote corre sobre el WAV completo.
+    """
+    if not path.exists():
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+    if data.get("model") != PYANNOTE_MODEL or data.get("speakers") != speakers:
+        print(f"[3/4] Caché de diarización '{path.name}' ignorada "
+              f"(se generó con otro modelo/nº de hablantes).")
+        return None
+    turns = data.get("turns")
+    if not turns:
+        return None
+    print(f"[3/4] Reutilizando diarización en caché '{path.name}' "
+          f"({len(turns)} turno(s)) — diarización omitida.")
+    return turns
+
+
+def save_diarization(path: Path, speakers: int | None, turns: list[dict]) -> None:
+    """Guarda los turnos de diarización en disco para reutilizarlos en próximas ejecuciones."""
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"model": PYANNOTE_MODEL, "speakers": speakers, "turns": turns},
+                  f, ensure_ascii=False, indent=2)
+    print(f"    → Diarización cacheada en: {path.name}")
+
+
+def get_diarization(wav_path: Path, cache_path: Path, hf_token: str,
+                    speakers: int | None, force: bool) -> list[dict]:
+    """Devuelve los turnos de diarización reutilizando el caché si es válido.
+
+    Punto único de entrada compartido por el modo `--diarize-only` y el pipeline completo: si el
+    caché coincide (y no se fuerza), se reutiliza y pyannote no se ejecuta; si no, se diariza y se
+    guarda el resultado.
+    """
+    turns = None if force else load_cached_diarization(cache_path, speakers)
+    if turns is None:
+        turns = diarize(wav_path, hf_token, speakers)
+        save_diarization(cache_path, speakers, turns)
     return turns
 
 
@@ -313,10 +415,16 @@ def write_output(results: list[dict], output_path: Path, json_path: Path | None,
         print(f"    → Datos estructurados en:   {json_path}")
 
     # ── Estadísticas ──
+    print_speaker_stats(results)
+
+
+def print_speaker_stats(items: list[dict]) -> None:
+    """Imprime el tiempo total por hablante a partir de cualquier lista con
+    `start`/`end`/`speaker` (segmentos transcritos o turnos de diarización)."""
     speakers = {}
-    for r in results:
-        sp = r["speaker"]
-        speakers[sp] = speakers.get(sp, 0) + (r["end"] - r["start"])
+    for it in items:
+        sp = it["speaker"]
+        speakers[sp] = speakers.get(sp, 0) + (it["end"] - it["start"])
 
     print("\n── Tiempo por hablante ──────────────────")
     total = sum(speakers.values())
@@ -378,9 +486,17 @@ def main():
         help="No generar el archivo .srt de subtítulos (por defecto sí se genera).",
     )
     parser.add_argument(
-        "--skip-diarization",
+        "--diarize",
         action="store_true",
-        help="Solo transcribe sin identificar hablantes (más rápido)",
+        help="Identifica los hablantes (diarización con pyannote). Desactivada por "
+             "defecto; requiere HF_TOKEN. Sin este flag solo se transcribe.",
+    )
+    parser.add_argument(
+        "--diarize-only",
+        action="store_true",
+        help="Solo diariza (quién habla y cuándo) sin transcribir: no carga Whisper. "
+             "Emite y cachea los turnos en <audio>_diarization.json y muestra el tiempo "
+             "por hablante. El pipeline completo reutiliza ese caché en ejecuciones futuras.",
     )
     parser.add_argument(
         "--debug-chunk",
@@ -407,7 +523,15 @@ def main():
         help="Re-transcribe cada chunk ignorando el caché por-chunk "
              "(implica saltar también el caché combinado).",
     )
+    parser.add_argument(
+        "--force-diarize",
+        action="store_true",
+        help="Ignora el caché de diarización (<audio>_diarization.json) y re-ejecuta pyannote.",
+    )
     args = parser.parse_args()
+
+    # Salida UTF-8 + VT/ANSI antes de imprimir nada (clave en Windows).
+    configure_console()
 
     # ── validaciones ──
     ensure_deps()
@@ -417,7 +541,17 @@ def main():
         print(f"[ERROR] No se encontró el archivo: {audio_path}")
         sys.exit(1)
 
-    if not args.skip_diarization and args.debug_chunk is None and not args.hf_token:
+    # --diarize-only es lo contrario de transcribir: incompatible con el modo que transcribe
+    # un solo fragmento (--debug-chunk).
+    if args.diarize_only and args.debug_chunk is not None:
+        print("[ERROR] --diarize-only y --debug-chunk son incompatibles "
+              "(--debug-chunk solo transcribe un fragmento).")
+        sys.exit(1)
+
+    # La diarización (cara y dependiente de HF) está desactivada por defecto: solo corre con
+    # --diarize (pipeline completo) o --diarize-only. --debug-chunk siempre la omite.
+    needs_diarization = (args.diarize or args.diarize_only) and args.debug_chunk is None
+    if needs_diarization and not args.hf_token:
         print("[ERROR] Se necesita un token de Hugging Face para la diarización.")
         print("  1. Regístrate en https://huggingface.co")
         print("  2. Acepta los términos en https://huggingface.co/pyannote/speaker-diarization-3.1")
@@ -431,15 +565,22 @@ def main():
     json_path = Path(args.json) if args.json else None
     srt_path = None if args.no_srt else output_path.with_suffix(".srt")
 
-    print(f"\n{'='*50}")
-    print(f"  Audio:    {audio_path.name}")
-    print(f"  Modelo:   {args.model}")
-    print(f"  Salida:   {output_path.name}")
-    print(f"{'='*50}\n")
-
     # Cachés persistentes junto al audio de origen (se reutilizan entre ejecuciones)
     cached_wav = audio_path.with_name(audio_path.stem + "_16k_mono.wav")
     cached_segments = audio_path.with_name(audio_path.stem + "_segments.json")
+    cached_diarization = audio_path.with_name(audio_path.stem + "_diarization.json")
+
+    print(f"\n{'='*50}")
+    print(f"  Audio:    {audio_path.name}")
+    if args.diarize_only:
+        print(f"  Modo:     solo diarización (sin transcripción)")
+        print(f"  Salida:   {cached_diarization.name}")
+    else:
+        print(f"  Modelo:   {args.model}")
+        diariza = args.diarize and args.debug_chunk is None
+        print(f"  Diarización: {'sí' if diariza else 'no'}")
+        print(f"  Salida:   {output_path.name}")
+    print(f"{'='*50}\n")
     # El caché por-chunk vive en un subdirectorio keyed por modelo+idioma+chunk_minutes,
     # ya que las fronteras de cada chunk dependen de chunk_minutes.
     chunk_cache_dir = (audio_path.with_name(audio_path.stem + "_chunks")
@@ -449,6 +590,16 @@ def main():
     with tempfile.TemporaryDirectory() as tmp_dir:
         # 1. Convertir a WAV (o reutilizar el de caché)
         wav_path = convert_to_wav(audio_path, cached_wav, force=args.force_wav)
+
+        # Modo solo-diarización: diariza (con caché) y termina sin transcribir; al no entrar en
+        # split/transcribe, Whisper nunca se carga.
+        if args.diarize_only:
+            turns = get_diarization(wav_path, cached_diarization, args.hf_token,
+                                    args.speakers, args.force_diarize)
+            print_speaker_stats(turns)
+            print(f"\n→ Diarización en: {cached_diarization.name}")
+            print(f"\n✓ Proceso completado (solo diarización).\n")
+            return
 
         # 2. Transcribir (con caché). En modo debug nunca se usa ni escribe el caché.
         if args.debug_chunk is not None:
@@ -475,13 +626,15 @@ def main():
                                              force=args.force_chunks)
                 save_segments(cached_segments, args.model, args.language, segments)
 
-        if args.skip_diarization or args.debug_chunk is not None:
-            results = [{**s, "speaker": "HABLANTE"} for s in segments]
-        else:
-            # 3. Diarizar sobre el WAV completo
-            turns = diarize(wav_path, args.hf_token, args.speakers)
+        # La diarización es opt-in (--diarize) y el modo debug siempre la omite.
+        if args.diarize and args.debug_chunk is None:
+            # 3. Diarizar sobre el WAV completo (reutilizando el caché si es válido)
+            turns = get_diarization(wav_path, cached_diarization, args.hf_token,
+                                    args.speakers, args.force_diarize)
             # 4. Fusionar
             results = assign_speakers(segments, turns)
+        else:
+            results = [{**s, "speaker": "HABLANTE"} for s in segments]
 
     # 5. Escribir salida
     write_output(results, output_path, json_path, srt_path)

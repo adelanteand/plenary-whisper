@@ -26,7 +26,7 @@ _AYUDA = """\
 Comandos disponibles:
   /ayuda    Muestra esta ayuda.
   /tokens   Muestra el uso de tokens acumulado en la sesión.
-  /salir    Termina la sesión (también: /exit, /quit, Ctrl-D).
+  /salir    Termina la sesión (también: /exit, /quit, Ctrl-D en Unix / Ctrl-Z+Enter en Windows).
 
 Ejemplos de preguntas:
   ¿Cuáles son los puntos del orden del día de este pleno?

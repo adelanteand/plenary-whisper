@@ -9,14 +9,13 @@ __pycache__/
 .pytest_cache/
 
 # Salidas y datos
-output/
 logs/
-videos/
 *.wav
 *.mp3
 *.mp4
 *.m4a
 *.ogg
+outputs/
 
 # Sistema / editor
 .DS_Store
