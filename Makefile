@@ -1,4 +1,4 @@
-.PHONY: help install install-analyzer analyzer env download
+.PHONY: help install install-analyzer analyzer env download transcribe
 
 .DEFAULT_GOAL := help
 
@@ -7,7 +7,11 @@
 URL ?=
 OUTPUT ?= videos/descarga.mp4
 
-# Argumentos opcionales para el chatbot.
+# AUDIO: ruta al audio/vídeo a transcribir (mp3, wav, m4a, mp4, ogg...).
+# Uso: make transcribe AUDIO=videos/pleno.mp4 ARGS="--speakers 3"
+AUDIO ?=
+
+# Argumentos opcionales (passthrough de flags al comando).
 # TRANSCRIPT: ruta a la transcripción (.txt/.json); por defecto usa la muestra.
 # ARGS:       flags extra, p. ej. ARGS="--model claude-opus-4-8 --debug"
 # Uso: make analyzer  |  make analyzer TRANSCRIPT=videos/otro.txt ARGS="--debug"
@@ -25,6 +29,10 @@ install-analyzer: ## Instala las dependencias del chatbot (analyzer)
 
 analyzer: ## Arranca el chatbot de análisis (vars: TRANSCRIPT, ARGS)
 	python -m analyzer $(TRANSCRIPT) $(ARGS)
+
+transcribe: ## Transcribe + diariza un audio con Whisper + pyannote (vars: AUDIO, ARGS)
+	@if [ -z "$(AUDIO)" ]; then echo "[ERROR] Falta AUDIO. Uso: make transcribe AUDIO=videos/pleno.mp4 ARGS=\"--speakers 3\""; exit 1; fi
+	python transcriber/transcribe_diarize.py "$(AUDIO)" $(ARGS)
 
 download: ## Descarga/remux de un stream con ffmpeg (vars: URL, OUTPUT)
 	@command -v ffmpeg >/dev/null 2>&1 || { echo "[ERROR] ffmpeg no está instalado. Instálalo con: brew install ffmpeg"; exit 1; }
