@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Monorepo con dos componentes para trabajar con audios de plenos municipales en castellano:
 
-- **`transcriber/`** — herramienta CLI de un solo script que transcribe + diariza audios
-  largos usando Whisper (transcripción) + pyannote.audio (diarización de hablantes). Toda la
-  lógica vive en `transcriber/transcribe_diarize.py`.
+- **`transcriber/`** — herramienta CLI de un solo script que transcribe audios largos con Whisper
+  y, **opcionalmente (con `--diarize`)**, diariza los hablantes con pyannote.audio. Por defecto
+  solo transcribe. Toda la lógica vive en `transcriber/transcribe_diarize.py`.
 - **`analyzer/`** — chatbot que analiza las transcripciones generadas, construido con el
   Anthropic SDK siguiendo una arquitectura hub-spoke (un agente "hub" orquesta; los "spokes"
   especializados —aún por implementar— harán el trabajo concreto). Entrypoint:
@@ -22,10 +22,14 @@ Cada componente tiene su propio `requirements.txt`; comparten el venv 3.9 y el `
 - `make install-analyzer` — instala las dependencias del chatbot (`analyzer/requirements.txt`).
 - `make env` — crea `.env` desde `.env_template` (luego hay que rellenar `HF_TOKEN` y `ANTHROPIC_API_KEY`).
 - `make download URL="https://...m3u8" OUTPUT=videos/pleno.mp4` — descarga/remux de un stream con ffmpeg (falla con error si ffmpeg no está instalado).
-- Ejecución típica del transcriptor:
-  `python transcriber/transcribe_diarize.py videos/pleno.mp4 --speakers 3`
+- Ejecución típica del transcriptor (solo transcribe; la diarización va OFF por defecto):
+  `python transcriber/transcribe_diarize.py videos/pleno.mp4`
+- Con diarización de hablantes (requiere `HF_TOKEN`; `--speakers` solo aplica al diarizar):
+  `python transcriber/transcribe_diarize.py videos/pleno.mp4 --diarize --speakers 3`
 - Iteración rápida (omite diarización, transcribe un solo fragmento):
   `python transcriber/transcribe_diarize.py videos/pleno.mp4 --debug-chunk 1`
+- Solo diarización (no carga Whisper; cachea los turnos para reusarlos luego):
+  `python transcriber/transcribe_diarize.py videos/pleno.mp4 --diarize-only --speakers 3`
 - Chatbot de análisis (usa la transcripción de muestra por defecto):
   `python -m analyzer`
 
@@ -39,7 +43,7 @@ No hay tests ni linter configurados.
    - **Combinado** (ruta rápida): el resultado completo se cachea en `<stem>_segments.json` (con modelo+idioma); en re-ejecuciones se reutiliza si coinciden, saltando split+transcripción por entero. Usa `--force-transcribe` para ignorarlo y reconstruirlo desde los chunks (reutilizando el caché por-chunk).
    
    El caché por-chunk evita perder el progreso si el proceso se interrumpe a mitad (crash, Ctrl-C, OOM); el combinado evita repetir todo cuando solo falla la diarización posterior. El modo `--debug-chunk` no usa el caché por-chunk (siempre transcribe fresco).
-3. `diarize` → pyannote sobre el WAV completo; devuelve turnos de hablante.
+3. `diarize` → pyannote sobre el WAV completo; devuelve turnos de hablante. **Opt-in**: solo corre con `--diarize` (o `--diarize-only`); por defecto el pipeline omite este paso y `assign_speakers` etiqueta todo como `HABLANTE`. **Cacheado** en `<stem>_diarization.json` (con modelo de pyannote + nº de hablantes; *no* depende de `chunk_minutes` ni idioma porque corre sobre el WAV entero): en re-ejecuciones se reutiliza si coinciden, saltando pyannote. Usa `--force-diarize` para ignorarlo y re-diarizar. El acceso unificado (lectura de caché → diarizar → guardar) está en `get_diarization()`, compartido por el pipeline completo (`--diarize`) y el modo `--diarize-only`. Este último diariza y termina **sin transcribir** (Whisper nunca se carga), emitiendo solo los turnos cacheados y el tiempo por hablante; es incompatible con `--debug-chunk`.
 4. `assign_speakers` → asigna hablante a cada segmento por mayor solapamiento temporal.
 5. `write_output` → genera el TXT, el SRT sincronizado (salvo `--no-srt`), un JSON opcional y estadísticas de tiempo por hablante.
 
@@ -47,8 +51,9 @@ No hay tests ni linter configurados.
 
 - **Python 3.9.6**: el venv es 3.9. Por eso el script empieza con `from __future__ import annotations`, necesario para que la sintaxis `X | None` no rompa en 3.9. No lo quites.
 - **`huggingface_hub<1.0`** (pin en `transcriber/requirements.txt`): pyannote.audio 3.4.0 llama internamente a `hf_hub_download(use_auth_token=...)`, kwarg eliminado en huggingface_hub 1.0. No actualices esa dependencia ni cambies el `use_auth_token=` en `diarize()`.
+- **`torch<2.6` / `torchaudio<2.6`** (pin en `transcriber/requirements.txt`): torch ≥2.6 cambió el default de `torch.load` a `weights_only=True`, lo que rompe la carga del checkpoint de pyannote.audio 3.4.0 (`WeightsUnpickler error: ... TorchVersion`). torch<2.6 usa `weights_only=False` por defecto y carga bien. No subas torch a ≥2.6 sin actualizar antes pyannote a una versión compatible.
 - **Idioma forzado a `es`** (flag `--language`, default `es`): el autodetect de Whisper fallaba (detectaba "Nynorsk") en silencios/aplausos. `--language auto` reactiva la detección automática.
-- **`HF_TOKEN`** es obligatorio para la diarización y se carga de `.env` vía `load_dotenv()`. No se necesita con `--skip-diarization` ni con `--debug-chunk`.
+- **`HF_TOKEN`** se carga de `.env` vía `load_dotenv()` y solo es obligatorio cuando se diariza (`--diarize` o `--diarize-only`). Como la diarización está OFF por defecto, la ejecución básica y `--debug-chunk` no lo necesitan.
 
 ## Analyzer (chatbot)
 
