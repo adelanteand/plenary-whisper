@@ -1,6 +1,8 @@
 # Entorno y secretos
 .env
 .venv/
+.venv-mcp/
+.venv-analyzer/
 
 # Python
 __pycache__/

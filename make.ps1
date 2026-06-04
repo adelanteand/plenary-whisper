@@ -5,13 +5,17 @@
   PowerShell, así que este script replica los mismos targets.
 
 .DESCRIPTION
-  Targets: help, install, install-analyzer, analyzer, transcribe, diarize, download, env.
+  Targets: help, install, install-analyzer, install-mcp, analyzer, mcp-serve,
+  transcribe, diarize, download, env.
 
 .EXAMPLE
   .\make.ps1 install
+  .\make.ps1 install-analyzer
+  .\make.ps1 install-mcp
   .\make.ps1 transcribe -Audio outputs\videos\pleno.mp4 --diarize --speakers 3
   .\make.ps1 diarize    -Audio outputs\videos\pleno.mp4 --speakers 3
   .\make.ps1 analyzer   -Transcript outputs\videos\otro.txt --debug
+  .\make.ps1 mcp-serve
   .\make.ps1 download   -Url "https://...m3u8" -Output outputs\videos\pleno.mp4
   .\make.ps1 env
 
@@ -22,8 +26,8 @@
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('help', 'install', 'install-analyzer', 'analyzer',
-                 'transcribe', 'diarize', 'download', 'env')]
+    [ValidateSet('help', 'install', 'install-analyzer', 'install-mcp', 'analyzer',
+                 'mcp-serve', 'transcribe', 'diarize', 'download', 'env')]
     [string]$Target = 'help',
 
     [string]$Audio,
@@ -53,8 +57,10 @@ function Invoke-Help {
     Write-Host "Targets disponibles (uso: .\make.ps1 <target> [opciones]):`n"
     $rows = @(
         @('install',          'Instala las dependencias del transcriptor'),
-        @('install-analyzer', 'Instala las dependencias del chatbot (analyzer)'),
+        @('install-analyzer', 'Crea el venv 3.10+ del chatbot (.venv-analyzer) e instala sus dependencias (incluye el SDK mcp)'),
+        @('install-mcp',      'Crea el venv 3.10+ del servidor MCP de .srt e instala sus dependencias'),
         @('analyzer',         'Arranca el chatbot de análisis (-Transcript, flags extra)'),
+        @('mcp-serve',        'Arranca el servidor MCP de .srt por stdio (requiere install-mcp antes)'),
         @('transcribe',       'Transcribe un audio (-Audio, flags extra; --diarize para hablantes)'),
         @('diarize',          'Solo diarización, sin Whisper (-Audio, flags extra)'),
         @('download',         'Descarga/remux de un stream con ffmpeg (-Url, -Output)'),
@@ -74,14 +80,25 @@ switch ($Target) {
     }
 
     'install-analyzer' {
-        & (Get-Python) -m pip install -r analyzer\requirements.txt
+        # En Windows el venv expone los ejecutables en Scripts\ (no bin/ como en POSIX).
+        & (Get-Python) -m venv .venv-analyzer
+        & '.venv-analyzer\Scripts\pip.exe' install -r analyzer\requirements.txt
+    }
+
+    'install-mcp' {
+        & (Get-Python) -m venv .venv-mcp
+        & '.venv-mcp\Scripts\pip.exe' install -r srt_mcp\requirements.txt
     }
 
     'analyzer' {
         $cmd = @('-m', 'analyzer')
         if ($Transcript) { $cmd += $Transcript }
         if ($Rest)       { $cmd += $Rest }
-        & (Get-Python) @cmd
+        & '.venv-analyzer\Scripts\python.exe' @cmd
+    }
+
+    'mcp-serve' {
+        & '.venv-mcp\Scripts\python.exe' -m srt_mcp
     }
 
     'transcribe' {

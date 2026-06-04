@@ -1,4 +1,4 @@
-.PHONY: help install install-analyzer analyzer env download transcribe diarize
+.PHONY: help install install-analyzer install-mcp analyzer mcp-serve env download transcribe diarize
 
 .DEFAULT_GOAL := help
 
@@ -24,11 +24,19 @@ help: ## Muestra esta ayuda (lista de targets disponibles)
 install: ## Instala las dependencias del transcriptor
 	python -m pip install -r transcriber/requirements.txt
 
-install-analyzer: ## Instala las dependencias del chatbot (analyzer)
-	python -m pip install -r analyzer/requirements.txt
+install-analyzer: ## Crea el venv 3.10+ del chatbot (.venv-analyzer) e instala sus dependencias (incluye el SDK mcp)
+	python3 -m venv .venv-analyzer
+	.venv-analyzer/bin/pip install -r analyzer/requirements.txt
+
+install-mcp: ## Crea el venv 3.10+ del servidor MCP de .srt e instala sus dependencias
+	python3 -m venv .venv-mcp
+	.venv-mcp/bin/pip install -r srt_mcp/requirements.txt
 
 analyzer: ## Arranca el chatbot de análisis (vars: TRANSCRIPT, ARGS)
-	python -m analyzer $(TRANSCRIPT) $(ARGS)
+	.venv-analyzer/bin/python -m analyzer $(TRANSCRIPT) $(ARGS)
+
+mcp-serve: ## Arranca el servidor MCP de .srt por stdio (requiere make install-mcp antes)
+	.venv-mcp/bin/python -m srt_mcp
 
 transcribe: ## Transcribe un audio con Whisper (añade --diarize en ARGS para identificar hablantes) (vars: AUDIO, ARGS)
 	@if [ -z "$(AUDIO)" ]; then echo "[ERROR] Falta AUDIO. Uso: make transcribe AUDIO=outputs/videos/pleno.mp4 ARGS=\"--diarize --speakers 3\""; exit 1; fi

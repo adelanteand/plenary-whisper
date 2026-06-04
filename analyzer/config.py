@@ -1,7 +1,7 @@
 """Configuración y carga de entorno del asistente.
 
 Constantes ajustables por variable de entorno y carga del `.env` raíz (donde
-vive `ANTHROPIC_API_KEY`). Python 3.9: `from __future__ import annotations`.
+vive `ANTHROPIC_API_KEY`). El analyzer corre en su propio venv 3.10+ (.venv-analyzer).
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ PACKAGE_NAME = "analyzer"
 
 # Modelo por defecto. Sobreescribible con la variable ANALYZER_MODEL o el flag --model.
 # El usuario eligió Sonnet 4.6 para iterar (1M de contexto, más barato que Opus).
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = "claude-haiku-4-5"
 MODEL = os.environ.get("ANALYZER_MODEL", DEFAULT_MODEL)
 
 # Tope de tokens de salida por respuesta. Con streaming se podría subir hasta 64000.
@@ -38,6 +38,14 @@ MAX_TRANSCRIPT_TOKENS = int(os.environ.get("ANALYZER_MAX_TRANSCRIPT_TOKENS", "70
 DEFAULT_TRANSCRIPT = os.environ.get(
     "ANALYZER_TRANSCRIPT", "outputs/videos/pleno_20_mayo_2026_transcripcion.txt"
 )
+
+# .srt para las herramientas de cita (override opcional). Si está vacío, el hub deriva
+# el .srt hermano de la transcripción cargada (ver transcript.sibling_srt).
+DEFAULT_SRT = os.environ.get("ANALYZER_SRT", "")
+
+# Directorio del catálogo de plenos: dónde busca `listar_srt` los .srt disponibles y a
+# qué carpeta se acotan las lecturas por `ruta` (SRT_MCP_BASE_DIR del servidor).
+TRANSCRIPTS_DIR = os.environ.get("ANALYZER_TRANSCRIPTS_DIR", "outputs/videos")
 
 
 def configure_console() -> None:

@@ -5,17 +5,17 @@ Comandos: /ayuda, /tokens, /salir. Maneja Ctrl-C y EOF sin reventar.
 
 from __future__ import annotations
 
+import sys
+
 from . import config
 
 _BANNER = """\
 ══════════════════════════════════════════════════════════════
   Asistente de análisis de plenos
 ══════════════════════════════════════════════════════════════
-  Transcripción : {path}
-  Formato       : {fmt}
-  Hablantes     : {speakers}
   Modelo        : {model}
   Contexto      : {tokens}
+  Herramientas  : {tools}
 ──────────────────────────────────────────────────────────────
   Pregunta en lenguaje natural sobre el pleno.
   Comandos: /ayuda · /tokens · /salir
@@ -41,6 +41,16 @@ def _format_tokens(n: int) -> str:
     return "{} tokens (~{}k)".format(n, round(n / 1000))
 
 
+def _input_prompt() -> str:
+    """Marcador del turno del usuario, bien visible. Negrita + color cian en terminal
+    interactiva; texto plano si la salida está redirigida (pipes/tests), para no
+    ensuciar los logs con secuencias ANSI. El texto que teclee el usuario va tras el
+    reset, en color normal."""
+    if sys.stdout.isatty() and sys.stdin.isatty():
+        return "\n\033[1;36m❯\033[0m "
+    return "\n❯ "
+
+
 def _print_usage(orch) -> None:
     t = orch.usage_totals
     print(
@@ -53,21 +63,23 @@ def _print_usage(orch) -> None:
 
 
 def run_repl(orch, transcript, debug: bool = False, context_tokens=None) -> None:
-    speakers = (
-        ", ".join(transcript.speakers) if transcript.speakers
-        else "sin diarización"
-    )
+    if orch.tools:
+        nombres = ", ".join(t["name"] for t in orch.tools)
+        if orch.srt_path is not None:
+            tools = "{} (pleno actual: {})".format(nombres, orch.srt_path.name)
+        else:
+            tools = "{} (sin pleno cargado; usa listar_srt)".format(nombres)
+    else:
+        tools = "—  (sin .srt asociado)"
     print(_BANNER.format(
-        path=transcript.path,
-        fmt=transcript.source_format,
-        speakers=speakers,
         model=orch.model,
         tokens=_format_tokens(context_tokens),
+        tools=tools,
     ))
 
     while True:
         try:
-            user_text = input("\n› ").strip()
+            user_text = input(_input_prompt()).strip()
         except (EOFError, KeyboardInterrupt):
             print("\n¡Hasta luego!")
             return
