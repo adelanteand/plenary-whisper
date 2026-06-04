@@ -115,3 +115,22 @@ def load_transcript(path) -> Transcript:
         return _load_json(p)
     # Por defecto tratamos cualquier otra extensión como texto plano.
     return _load_txt(p)
+
+
+def sibling_srt(path) -> Optional[Path]:
+    """Deriva el .srt que acompaña a una transcripción cargada; None si no existe.
+
+    El transcriptor nombra las salidas de forma determinista junto al audio:
+    `<stem>_transcripcion.{txt,srt}` y `<stem>_segments.json`. Así:
+    - `..._transcripcion.txt` → `..._transcripcion.srt` (mismo stem).
+    - `..._segments.json`     → `..._transcripcion.srt` (swap del sufijo del stem).
+    """
+    p = Path(path)
+    candidatas = [p.with_suffix(".srt")]
+    if p.stem.endswith("_segments"):
+        base = p.stem[: -len("_segments")]
+        candidatas.append(p.with_name(base + "_transcripcion.srt"))
+    for c in candidatas:
+        if c.exists():
+            return c
+    return None

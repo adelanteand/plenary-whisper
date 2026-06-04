@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "srt": {
+      "command": "${CLAUDE_PROJECT_DIR:-.}/.venv-mcp/bin/python",
+      "args": ["-m", "srt_mcp"],
+      "env": {
+        "PYTHONPATH": "${CLAUDE_PROJECT_DIR:-.}"
+      }
+    }
+  }
+}

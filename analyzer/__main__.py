@@ -36,6 +36,12 @@ def main() -> None:
         help="Modelo de Claude a usar (por defecto: {}).".format(config.MODEL),
     )
     parser.add_argument(
+        "--srt",
+        default=config.DEFAULT_SRT or None,
+        help="Ruta al .srt para las herramientas de cita. Por defecto se deriva del "
+             "transcript cargado (su .srt hermano).",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Muestra el uso de tokens (incl. aciertos de caché) tras cada turno.",
@@ -54,7 +60,8 @@ def main() -> None:
         sys.exit(1)
 
     client = anthropic.Anthropic()
-    orch = Orchestrator(client, transcript, model=args.model, debug=args.debug)
+    orch = Orchestrator(client, transcript, model=args.model, debug=args.debug,
+                        srt_path=args.srt)
 
     # Salvaguarda de tamaño: contar tokens del contexto antes del primer turno.
     context_tokens = None
@@ -75,7 +82,11 @@ def main() -> None:
             "[AVISO] No se pudo contar el contexto ({}). Continúo igualmente.\n".format(e)
         )
 
-    run_repl(orch, transcript, debug=args.debug, context_tokens=context_tokens)
+    try:
+        run_repl(orch, transcript, debug=args.debug, context_tokens=context_tokens)
+    finally:
+        # Reapea el subproceso del servidor MCP en salida normal, Ctrl-C/EOF o error.
+        orch.close()
 
 
 if __name__ == "__main__":

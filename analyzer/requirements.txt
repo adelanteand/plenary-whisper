@@ -1,5 +1,9 @@
 # Dependencias del chatbot de análisis (analyzer/). Separadas del transcriptor
 # (que arrastra torch/whisper/pyannote y el pin huggingface_hub<1.0).
-# Mismo venv 3.9. El SDK de Anthropic soporta Python 3.8+.
+#
+# Venv PROPIO en Python 3.10+ (.venv-analyzer): el analyzer es un cliente MCP real del
+# servidor srt_mcp (SDK oficial `mcp`, que exige 3.10+). Ya NO comparte el venv 3.9 del
+# transcriber (no tiene ninguna dependencia de su código).
 anthropic
 python-dotenv
+mcp

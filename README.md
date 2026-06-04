@@ -1,11 +1,15 @@
 # Plenos — Transcripción, Diarización y Análisis
 
-Monorepo con dos componentes:
+Monorepo con tres componentes:
 
 - **`transcriber/`** — transcripción + diarización de audio con Whisper (OpenAI) + pyannote
-  (local y gratuito). Documentado abajo.
+  (local y gratuito). Genera `.txt`, `.srt` y, opcionalmente, `.json`. Documentado abajo.
 - **`analyzer/`** — chatbot que analiza las transcripciones generadas, con el Anthropic SDK
-  (arquitectura hub-spoke). Ver [Análisis con chatbot](#análisis-con-chatbot-analyzer).
+  (arquitectura hub-spoke). Usa el servidor MCP de abajo para citar con marcas de tiempo
+  exactas. Ver [Análisis con chatbot](#análisis-con-chatbot-analyzer).
+- **`srt_mcp/`** — servidor MCP que expone tools de lectura y búsqueda sobre los `.srt`
+  generados. Lo consumen Claude Code y el `analyzer`. Ver
+  [Servidor MCP de SRT](#servidor-mcp-de-srt-srt_mcp).
 
 > **Windows:** el `Makefile` usa shell POSIX y **no** corre en cmd.exe/PowerShell. Usa el
 > equivalente `make.ps1` (mismos targets) o invoca los comandos Python directamente —
@@ -22,16 +26,20 @@ Monorepo con dos componentes:
 - **Transcribe** el audio usando Whisper (funciona en español, inglés y 100+ idiomas)
 - **Identifica quién habla** en cada momento (diarización) con pyannote — opcional, con `--diarize`
 - Soporta archivos de cualquier duración (trocea el audio automáticamente)
-- Genera un `.txt` legible y opcionalmente un `.json` estructurado
+- Genera un `.txt` legible y un `.srt` sincronizado (subtítulos), y opcionalmente un `.json`
+  estructurado. El `.srt` es lo que consulta el [servidor MCP](#servidor-mcp-de-srt-srt_mcp).
 
 ---
 
 ## Requisitos previos
 
-### 1. Python 3.9+
+### 1. Python (3.9+ para el transcriptor)
 ```bash
 python --version
 ```
+> El **transcriptor** corre en Python 3.9+. El **`analyzer/`** y el **`srt_mcp/`** necesitan
+> Python **3.10+** (lo exige el SDK `mcp`) y usan cada uno su propio venv —`.venv-analyzer` y
+> `.venv-mcp`—, que crean sus respectivos `make install-…` (ver sus secciones más abajo).
 
 ### 2. ffmpeg
 ```bash
@@ -220,21 +228,32 @@ python -m analyzer
 > **ffmpeg** debe estar en el `PATH` (lo necesita pydub para leer mp3/mp4/m4a): `winget install
 > Gyan.FFmpeg` y reabre la terminal. La salida UTF-8/ANSI ya se configura sola en el arranque.
 
+> **Python 3.10+ para `analyzer/` y `srt_mcp/`:** ambos usan el SDK `mcp`. En macOS/Linux, `make`
+> les crea venvs propios (`.venv-analyzer`, `.venv-mcp`). En Windows, `make.ps1` aún instala el
+> chatbot en el **Python activo** (asegúrate de que sea 3.10+) y **no** cubre el servidor MCP:
+> crea su venv a mano, p. ej.
+> `py -3.12 -m venv .venv-mcp; .venv-mcp\Scripts\pip install -r srt_mcp\requirements.txt`.
+
 ---
 
 ## Análisis con chatbot (`analyzer/`)
 
 Un asistente de terminal que conversa sobre una transcripción ya generada, construido con el
-**Anthropic SDK**. Arquitectura **hub-spoke**: un agente "hub" orquesta el trabajo y, en
-futuras iteraciones, delega en "spokes" especializados (estadísticas por hablante, extracción
-del orden del día, búsqueda de citas con marca de tiempo, resúmenes por punto). La primera
-iteración es un **agente único** sobre el que iterar.
+**Anthropic SDK**. Arquitectura **hub-spoke**: un agente "hub" orquesta y delega en "spokes"
+especializados. El hub actúa como **cliente MCP** del servidor
+[`srt_mcp`](#servidor-mcp-de-srt-srt_mcp) y expone sus tools (`buscar_srt`, `leer_srt`,
+`listar_srt`): puede **listar los plenos disponibles** y **abrir/buscar en cualquiera** de ellos,
+y **citar con marcas de tiempo exactas** en lugar de estimarlas. La transcripción cargada va
+completa en el contexto (es el pleno "actual"); los demás se consultan por tools. Sin `.srt` ni
+catálogo, funciona como agente único. (Spokes in-process futuros: estadísticas por hablante, orden
+del día, resúmenes por punto.)
 
 ### Requisitos
 
-1. Instalar dependencias del chatbot (en el mismo venv 3.9):
+1. Crear el venv del chatbot (Python **3.10+**, propio: `.venv-analyzer`) e instalar sus deps
+   —incluye el SDK `mcp` para hablar con el servidor MCP—:
    ```bash
-   make install-analyzer        # o: pip install -r analyzer/requirements.txt
+   make install-analyzer
    ```
 2. Añadir tu clave de API de Anthropic al `.env` (`make env` lo crea desde la plantilla):
    ```
@@ -246,16 +265,57 @@ iteración es un **agente único** sobre el que iterar.
 
 ```bash
 # Usa la transcripción de muestra por defecto
-python -m analyzer
+make analyzer
 
-# Indica otra transcripción (.txt o .json) y modelo
-python -m analyzer outputs/videos/otro_pleno_transcripcion.txt --model claude-opus-4-8 --debug
+# Indica otra transcripción (.txt o .json) y flags extra
+make analyzer TRANSCRIPT=outputs/videos/otro_pleno_transcripcion.txt ARGS="--model claude-opus-4-8 --debug"
+
+# O directamente con el intérprete del venv del chatbot
+.venv-analyzer/bin/python -m analyzer outputs/videos/otro_pleno_transcripcion.txt --debug
 ```
 
-Dentro del chat: pregunta en lenguaje natural (p.ej. *"¿Cuáles son los puntos del orden del
-día?"*). Comandos: `/ayuda`, `/tokens` (uso acumulado), `/salir`.
+El `.srt` por defecto se detecta solo (el hermano de la transcripción cargada); fuérzalo con
+`--srt ruta.srt` o la variable `ANALYZER_SRT`. El catálogo de plenos que el agente puede listar y
+abrir es `outputs/videos` (ajustable con `ANALYZER_TRANSCRIPTS_DIR`). Dentro del chat: pregunta en
+lenguaje natural (p.ej. *"¿qué plenos tienes?"* o *"¿En qué minuto exacto se levanta la sesión?"*).
+Comandos: `/ayuda`, `/tokens` (uso acumulado), `/salir`.
 
-> **Nota:** el modelo por defecto es `claude-sonnet-4-6` (barato para iterar). La transcripción
-> se cachea en el contexto (prompt caching), así que cada turno es económico. Como la
-> transcripción por defecto **no diariza**, no habrá identificación de hablantes y el análisis
-> "por hablante" no estará disponible hasta regenerarla con `--diarize`.
+> **Nota:** el modelo por defecto es `claude-haiku-4-5` (barato para iterar; sobreescribible con
+> `--model` o `ANALYZER_MODEL`). La transcripción se cachea en el contexto (prompt caching), así
+> que cada turno es económico. Como la transcripción por defecto **no diariza**, no habrá
+> identificación de hablantes y el análisis "por hablante" no estará disponible hasta regenerarla
+> con `--diarize`.
+
+---
+
+## Servidor MCP de SRT (`srt_mcp/`)
+
+Servidor [MCP](https://modelcontextprotocol.io) (SDK oficial `mcp`/FastMCP, transporte **stdio**,
+sin puerto de red) que expone como *tools* operaciones de **lectura, búsqueda y listado** sobre los
+`.srt` que genera el transcriptor. Corre en su **propio venv 3.10+** (`.venv-mcp`), aparte del
+transcriptor.
+
+Tools (`ruta` es opcional; si se omite, usa `SRT_MCP_DEFAULT_FILE`):
+- `leer_srt(...)` — lee un tramo de cues (paginado o acotado a una ventana temporal).
+- `buscar_srt(consulta, ...)` — busca texto y devuelve los cues coincidentes con su timestamp.
+- `listar_srt(directorio=None)` — lista los `.srt` disponibles (nombre, `ruta`, tamaño, nº de cues,
+  duración) para descubrir qué plenos hay antes de leerlos.
+
+Lo consumen **dos clientes**:
+- **Claude Code** — registrado vía `.mcp.json` (scope de proyecto, ya en el repo; sus paths usan
+  `${CLAUDE_PROJECT_DIR:-.}`, así que es portable entre clones y no lleva rutas absolutas). Tras
+  instalarlo, reinicia Claude Code en este repo y aprueba el servidor `srt` cuando lo pida.
+- **El `analyzer`** — como cliente MCP, para listar plenos y citar con marcas de tiempo exactas
+  (ver su sección).
+
+### Instalación y uso manual
+
+```bash
+make install-mcp     # crea .venv-mcp (3.10+) e instala el SDK mcp
+make mcp-serve       # arranca el servidor por stdio (inspección manual)
+```
+
+Variables de entorno opcionales: `SRT_MCP_DEFAULT_FILE` (fichero `.srt` por defecto cuando se
+llama a `leer_srt`/`buscar_srt` sin `ruta`) y `SRT_MCP_BASE_DIR` (restringe a un directorio las
+lecturas por `ruta` y es la carpeta por defecto de `listar_srt`).
+Más detalles en [`srt_mcp/README.md`](srt_mcp/README.md) y [`srt_mcp/CLAUDE.md`](srt_mcp/CLAUDE.md).
